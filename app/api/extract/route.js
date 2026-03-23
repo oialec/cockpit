@@ -18,56 +18,79 @@ export async function POST(request) {
       },
       body: JSON.stringify({
         model: 'claude-sonnet-4-20250514',
-        max_tokens: 2000,
+        max_tokens: 4000,
         messages: [{
           role: 'user',
-          content: `Você é um assistente que analisa documentos de projeto e extrai um plano de execução estruturado.
+          content: `Analise este documento do projeto "${projectName}" e extraia um plano de execução.
 
-Analise o documento do projeto "${projectName}" abaixo e extraia:
+REGRAS OBRIGATÓRIAS:
+1. Retorne SOMENTE um array JSON válido, nada mais
+2. NÃO use backticks, NÃO escreva "json", NÃO adicione explicação
+3. A primeira linha da sua resposta DEVE ser [
+4. A última linha DEVE ser ]
 
-1. As ETAPAS/FASES do projeto (sprints, fases, marcos — qualquer agrupamento lógico)
-2. Dentro de cada etapa, as TAREFAS concretas que precisam ser feitas
-
-Para cada etapa, defina:
-- phase: nome curto da etapa (ex: "Fundação", "Pesquisa de Mercado", "MVP", "Launch")
-- order: número da ordem (1, 2, 3...)
-
-Para cada tarefa dentro da etapa:
-- title: o que fazer (frase curta e direta)
-- description: contexto ou detalhe (1 frase, pode ser vazio)
-- priority: "urgent" (bloqueia o resto), "high" (crítico pra funcionar), "medium" (melhora experiência), "low" (pode esperar)
-- time_estimate: estimativa de tempo se mencionada no texto (ex: "30min", "2h", "1 dia"), ou null
-
-Regras:
-- Extraia APENAS coisas que precisam ser FEITAS (ações), não descrições ou conceitos
-- Mantenha a ordem lógica de execução (o que vem antes, vem primeiro)
-- Se o documento não tem fases explícitas, crie agrupamentos lógicos baseado no conteúdo
-- Se não encontrar tarefas acionáveis, retorne []
-
-Retorne APENAS JSON válido, sem markdown, sem backticks:
+Estrutura do JSON:
 [
   {
     "phase": "Nome da Etapa",
     "order": 1,
     "tasks": [
-      {"title": "...", "description": "...", "priority": "...", "time_estimate": "..."}
+      {"title": "O que fazer", "description": "Contexto curto", "priority": "high", "time_estimate": "2h"}
     ]
   }
 ]
 
+Instruções:
+- Identifique ETAPAS/FASES/SPRINTS do projeto
+- Dentro de cada etapa, liste TAREFAS concretas (ações, não descrições)
+- priority: "urgent", "high", "medium" ou "low"
+- time_estimate: tempo mencionado no texto ou null
+- Se o documento não tem fases explícitas, crie agrupamentos lógicos
+- Mantenha a ordem de execução
+
 Documento:
-${text.slice(0, 8000)}`
+${text.slice(0, 10000)}`
         }]
       })
     })
 
+    if (!response.ok) {
+      const errData = await response.text()
+      console.error('Anthropic API error:', response.status, errData)
+      return NextResponse.json({ error: 'API error ' + response.status, debug: errData }, { status: 500 })
+    }
+
     const data = await response.json()
-    const raw = data.content?.map(i => i.text || '').join('') || '[]'
-    const cleaned = raw.replace(/```json|```/g, '').trim()
-    const phases = JSON.parse(cleaned)
-    return NextResponse.json({ phases })
+    const raw = data.content?.map(i => i.text || '').join('') || ''
+
+    if (!raw.trim()) {
+      return NextResponse.json({ phases: [] })
+    }
+
+    // Robust JSON extraction
+    let cleaned = raw.trim()
+    cleaned = cleaned.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/\s*```$/i, '')
+
+    const arrayStart = cleaned.indexOf('[')
+    const arrayEnd = cleaned.lastIndexOf(']')
+
+    if (arrayStart === -1 || arrayEnd === -1 || arrayEnd <= arrayStart) {
+      return NextResponse.json({ phases: [] })
+    }
+
+    const jsonStr = cleaned.substring(arrayStart, arrayEnd + 1)
+
+    try {
+      const phases = JSON.parse(jsonStr)
+      if (!Array.isArray(phases)) return NextResponse.json({ phases: [] })
+      return NextResponse.json({ phases })
+    } catch (parseErr) {
+      console.error('JSON parse error:', parseErr.message)
+      return NextResponse.json({ phases: [] })
+    }
+
   } catch (err) {
-    console.error('AI extraction error:', err)
-    return NextResponse.json({ error: 'Falha na extração' }, { status: 500 })
+    console.error('Extract error:', err)
+    return NextResponse.json({ error: err.message }, { status: 500 })
   }
 }
