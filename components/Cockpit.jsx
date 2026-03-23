@@ -10,8 +10,7 @@ const PRI={urgent:{label:'URGENTE',color:'#f05a5a',bg:'rgba(240,90,90,0.1)',bord
 const STA={pending:{icon:'○'},active:{icon:'◎'},done:{icon:'✓'}}
 
 async function aiExtract(text,name){
-  const key=process.env.NEXT_PUBLIC_ANTHROPIC_API_KEY;if(!key)return null
-  try{const r=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'Content-Type':'application/json','x-api-key':key,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},body:JSON.stringify({model:'claude-haiku-4-5-20251001',max_tokens:1000,messages:[{role:'user',content:`Extraia tarefas acionáveis do texto do projeto "${name}". Para cada: title, description, priority ("urgent"/"high"/"medium"/"low"), category. Retorne APENAS JSON: [{"title":"...","description":"...","priority":"...","category":"..."}]\n\nTexto:\n${text.slice(0,6000)}`}]})});const d=await r.json();return JSON.parse((d.content?.map(i=>i.text||'').join('')||'[]').replace(/```json|```/g,'').trim())}catch(e){return null}
+  try{const r=await fetch('/api/extract',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text,projectName:name})});const d=await r.json();return d.tasks||null}catch(e){return null}
 }
 
 const CSS=`
