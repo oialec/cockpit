@@ -17,75 +17,80 @@ export async function POST(request) {
         'anthropic-version': '2023-06-01'
       },
       body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
+        model: 'claude-haiku-4-5-20251001',
         max_tokens: 4000,
+        system: `Você extrai planos de execução de documentos de projeto. Retorne APENAS JSON puro — sem texto, sem explicação, sem backticks. Sua resposta inteira deve ser um array JSON válido.
+
+FORMATO EXATO:
+[{"phase":"Nome da Etapa","order":1,"tasks":[{"title":"Ação concreta","description":"Detalhe curto","priority":"high","time_estimate":"2h"}]}]
+
+Prioridades: "urgent" (bloqueia tudo), "high" (crítico), "medium" (melhoria), "low" (pode esperar)
+
+EXEMPLO — se o documento diz:
+"Sprint 1: Configurar infra. Criar VPS (30min), instalar Docker (15min). Sprint 2: Banco de dados. Criar tabelas users e posts (1h), configurar RLS (30min)."
+
+Você retorna:
+[{"phase":"Configurar Infra","order":1,"tasks":[{"title":"Criar VPS","description":"Provisionar servidor","priority":"urgent","time_estimate":"30min"},{"title":"Instalar Docker","description":"Setup de containers","priority":"urgent","time_estimate":"15min"}]},{"phase":"Banco de Dados","order":2,"tasks":[{"title":"Criar tabelas users e posts","description":"Schema inicial","priority":"high","time_estimate":"1h"},{"title":"Configurar RLS","description":"Row Level Security","priority":"high","time_estimate":"30min"}]}]
+
+REGRAS:
+- Extraia APENAS ações (verbos: criar, configurar, montar, testar, instalar, escrever)
+- Ignore descrições, conceitos e explicações — só o que precisa ser FEITO
+- Se o documento tem sprints/fases, use esses nomes
+- Se não tem fases, agrupe por tema (Infra, Backend, Frontend, Marketing, etc)
+- time_estimate: use o tempo do documento ou null
+- Cada tarefa deve ter título curto e direto (máx 10 palavras)`,
         messages: [{
           role: 'user',
-          content: `Analise este documento do projeto "${projectName}" e extraia um plano de execução.
-
-REGRAS OBRIGATÓRIAS:
-1. Retorne SOMENTE um array JSON válido, nada mais
-2. NÃO use backticks, NÃO escreva "json", NÃO adicione explicação
-3. A primeira linha da sua resposta DEVE ser [
-4. A última linha DEVE ser ]
-
-Estrutura do JSON:
-[
-  {
-    "phase": "Nome da Etapa",
-    "order": 1,
-    "tasks": [
-      {"title": "O que fazer", "description": "Contexto curto", "priority": "high", "time_estimate": "2h"}
-    ]
-  }
-]
-
-Instruções:
-- Identifique ETAPAS/FASES/SPRINTS do projeto
-- Dentro de cada etapa, liste TAREFAS concretas (ações, não descrições)
-- priority: "urgent", "high", "medium" ou "low"
-- time_estimate: tempo mencionado no texto ou null
-- Se o documento não tem fases explícitas, crie agrupamentos lógicos
-- Mantenha a ordem de execução
-
-Documento:
-${text.slice(0, 10000)}`
+          content: `Extraia o plano de execução deste documento do projeto "${projectName}":\n\n${text.slice(0, 10000)}`
+        },
+        {
+          role: 'assistant',
+          content: '['
         }]
       })
     })
 
     if (!response.ok) {
       const errData = await response.text()
-      console.error('Anthropic API error:', response.status, errData)
-      return NextResponse.json({ error: 'API error ' + response.status, debug: errData }, { status: 500 })
+      console.error('Anthropic error:', response.status, errData)
+      return NextResponse.json({ error: 'API error ' + response.status }, { status: 500 })
     }
 
     const data = await response.json()
-    const raw = data.content?.map(i => i.text || '').join('') || ''
+    let raw = data.content?.map(i => i.text || '').join('') || ''
 
     if (!raw.trim()) {
       return NextResponse.json({ phases: [] })
     }
 
-    // Robust JSON extraction
-    let cleaned = raw.trim()
-    cleaned = cleaned.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/\s*```$/i, '')
+    // We prefilled with '[', so prepend it back
+    raw = '[' + raw.trim()
 
-    const arrayStart = cleaned.indexOf('[')
-    const arrayEnd = cleaned.lastIndexOf(']')
+    // Clean up any markdown artifacts
+    raw = raw.replace(/```json\s*/gi, '').replace(/```\s*/gi, '').trim()
 
-    if (arrayStart === -1 || arrayEnd === -1 || arrayEnd <= arrayStart) {
+    // Find the JSON array boundaries
+    const arrayEnd = raw.lastIndexOf(']')
+    if (arrayEnd === -1) {
       return NextResponse.json({ phases: [] })
     }
 
-    const jsonStr = cleaned.substring(arrayStart, arrayEnd + 1)
+    const jsonStr = raw.substring(0, arrayEnd + 1)
 
     try {
       const phases = JSON.parse(jsonStr)
       if (!Array.isArray(phases)) return NextResponse.json({ phases: [] })
       return NextResponse.json({ phases })
     } catch (parseErr) {
-      console.error('JSON parse error:', parseErr.message)
+      // Try to fix common JSON issues
+      try {
+        // Sometimes trailing commas break parsing
+        const fixed = jsonStr.replace(/,\s*]/g, ']').replace(/,\s*}/g, '}')
+        const phases = JSON.parse(fixed)
+        if (Array.isArray(phases)) return NextResponse.json({ phases })
+      } catch {}
+      
+      console.error('JSON parse failed:', parseErr.message, jsonStr.substring(0, 200))
       return NextResponse.json({ phases: [] })
     }
 
